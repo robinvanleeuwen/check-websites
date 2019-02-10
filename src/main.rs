@@ -6,6 +6,9 @@ use ini::Ini;
 use curl::easy::Easy;
 use std::collections::HashMap;
 use std::str;
+use std::io::{Write};
+
+static DEBUG: bool = true;
 
 #[derive(Debug)]
 #[derive(PartialEq)]
@@ -50,26 +53,26 @@ fn main() {
     // action. Parse the header if given and check for correct
     // working of the site (2xx, 3xx). Register site Up/Down.
     loop {
-        println!(".");
+        if DEBUG { eprint!("."); }
+        std::io::stdout().flush().unwrap();
 
         for site in &config.sites {
             let current_state = get_site_state(&site.clone());
             let state_counter = site_states.get_mut(&site.clone()).unwrap();
-            //println!("{}: {:?}", site, state_counter);
+
 
             if current_state == State::Down {
-                println!("x: {}", state_counter.count);
+                if DEBUG { eprint!("x({})", state_counter.count); }
                 state_counter.state = State::Down;
                 state_counter.count += 1;
             }
 
             if state_counter.count == config.max_retries {
-                println!("{} is Down ({} seconds):(", site, config.interval * state_counter.count);
+                if DEBUG {
+                    eprintln!("{} is Down ({} seconds) :(", site, config.interval * state_counter.count);
+                }
+                std::io::stdout().flush().unwrap();
                 continue;
-            }
-
-            if state_counter.count > config.max_retries {
-                //println!("{} has been down {} times", site, state_counter.count);
             }
 
             if current_state == State::Up && state_counter.count < config.max_retries {
@@ -78,12 +81,16 @@ fn main() {
                 continue;
             }
             if current_state == State::Up && state_counter.count > config.max_retries{
-                println!("Site {} is Up again!", site);
+
+                if DEBUG {
+                    eprintln!("Site {} is Up again after {} seconds!", site, config.interval * state_counter.count);
+                }
+                std::io::stdout().flush().unwrap();
                 state_counter.count = 0;
             }
 
         }
-        std::thread::sleep(std::time::Duration::from_secs(config.interval))
+        std::thread::sleep(std::time::Duration::from_secs(config.interval));
 
     }
 }
