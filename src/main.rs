@@ -2,13 +2,15 @@ extern crate ini;
 extern crate curl;
 extern crate core;
 
+#[macro_use] extern crate log;
+extern crate env_logger;
+
 use ini::Ini;
 use curl::easy::Easy;
 use std::collections::HashMap;
 use std::str;
 use std::io::{Write};
-
-static DEBUG: bool = true;
+use log::Level;
 
 #[derive(Debug)]
 #[derive(PartialEq)]
@@ -36,6 +38,8 @@ struct Config {
 
 fn main() {
 
+    env_logger::init();
+
     let config = read_config(
         "./check-websites.conf"
     );
@@ -53,7 +57,9 @@ fn main() {
     // action. Parse the header if given and check for correct
     // working of the site (2xx, 3xx). Register site Up/Down.
     loop {
-        if DEBUG { eprint!("."); }
+        if log_enabled!(Level::Debug){
+            debug!(".");
+        }
         std::io::stdout().flush().unwrap();
 
         for site in &config.sites {
@@ -62,14 +68,14 @@ fn main() {
 
 
             if current_state == State::Down {
-                if DEBUG { eprint!("x({})", state_counter.count); }
+                if log_enabled!(Level::Warn){ warn!("x({})", state_counter.count); }
                 state_counter.state = State::Down;
                 state_counter.count += 1;
             }
 
             if state_counter.count == config.max_retries {
-                if DEBUG {
-                    eprintln!("{} is Down ({} seconds) :(", site, config.interval * state_counter.count);
+                if log_enabled!(Level::Error) {
+                    error!("{} is Down ({} seconds) :(", site, config.interval * state_counter.count);
                 }
                 std::io::stdout().flush().unwrap();
                 continue;
@@ -82,8 +88,8 @@ fn main() {
             }
             if current_state == State::Up && state_counter.count > config.max_retries{
 
-                if DEBUG {
-                    eprintln!("Site {} is Up again after {} seconds!", site, config.interval * state_counter.count);
+                if log_enabled!(Level::Error) {
+                    error!("{} is Up again after {} seconds! Yey :)", site, config.interval * state_counter.count);
                 }
                 std::io::stdout().flush().unwrap();
                 state_counter.count = 0;
@@ -137,7 +143,6 @@ fn get_site_state(url: &str) -> State{
             state = State::Down;
         }
     }
-
     state
 }
 
@@ -165,6 +170,7 @@ fn read_config(filename: &str) -> Config {
         max_retries: settings.get("max_retries").unwrap().parse().unwrap(),
         sites
     };
+
     config
 
 }

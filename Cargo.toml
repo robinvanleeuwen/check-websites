@@ -4,5 +4,8 @@ version = "0.1.0"
 authors = ["Robin van Leeuwen <robinvanleeuwen@gmail.com>"]
 
 [dependencies]
+log = "0.4.6"
 curl = "0.4.16"
+getopts = "0.2.18"
+env_logger = "*"
 rust-ini = "0.13"
