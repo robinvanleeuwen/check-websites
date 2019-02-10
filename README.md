@@ -1,3 +1,3 @@
 # check-websites
-A simple utility to check websites if they are up or not.
+A simple utility to check websites if they are up or not. Trying out Rust.
 
