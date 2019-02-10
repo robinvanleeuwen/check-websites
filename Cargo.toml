@@ -1,0 +1,8 @@
+[package]
+name = "check-websites"
+version = "0.1.0"
+authors = ["Robin van Leeuwen <robinvanleeuwen@gmail.com>"]
+
+[dependencies]
+curl = "0.4.16"
+rust-ini = "0.13"
