@@ -1,6 +1,8 @@
 extern crate ini;
 extern crate curl;
 extern crate core;
+extern crate docopt;
+extern crate slack_hook;
 
 #[macro_use] extern crate log;
 extern crate env_logger;
@@ -11,7 +13,25 @@ use std::collections::HashMap;
 use std::str;
 use std::io::{Write};
 use log::Level;
+use slack_hook::{Slack, PayloadBuilder};
 
+//use docopt::Docopt;
+//const USAGE: &'static str = r#"
+//Check Websites
+//
+//Usage:
+//    check-websites -c <config file> [-d | -f]
+//
+//Options:
+//    -d --daemon     Run in daemon mode
+//    -f --foreground Run in foreground, log output to screen  (default)
+//    -l <log level>  Specifies log level: debug, info, warning, errror (default)
+//    (-h --help)     Show this
+//"#;
+
+
+/// The state describes the state of an website
+///
 #[derive(Debug)]
 #[derive(PartialEq)]
 enum State {
@@ -20,6 +40,10 @@ enum State {
     Unknown,
 }
 
+// holds the total count for many times the website has
+// been sequentially seen in this state and registers if
+// there has been a notification sent since the last state
+// switch.
 #[derive(Debug)]
 struct StateCounter {
     state: State,
@@ -27,6 +51,8 @@ struct StateCounter {
     notified: bool,
 }
 
+// The Config structs holds all necessary paramaters that
+// have been read from the configuration file.
 #[derive(Debug)]
 struct Config {
     interval: u64,
@@ -41,12 +67,11 @@ fn main() {
     env_logger::init();
 
     let config = read_config(
-        "./check-websites.conf"
+        "/etc/check-websites.conf"
     );
 
     // Create a HashMap to keep count of states.
     let mut site_states:HashMap<String, StateCounter> = HashMap::new();
-
 
     for site in &config.sites {
         let mut statecounter = StateCounter{state: State::Unknown, count:0, notified: true};
@@ -66,38 +91,51 @@ fn main() {
             let current_state = get_site_state(&site.clone());
             let state_counter = site_states.get_mut(&site.clone()).unwrap();
 
-
+            // Notice that site is down.
             if current_state == State::Down {
-                if log_enabled!(Level::Warn){ warn!("x({})", state_counter.count); }
+                if log_enabled!(Level::Warn)
+                {
+                    warn!("{} down ({} seconds)", site, config.interval * state_counter.count);
+                }
                 state_counter.state = State::Down;
                 state_counter.count += 1;
             }
 
+            // Site is down and max_retries has expired, so send error message.
             if state_counter.count == config.max_retries {
                 if log_enabled!(Level::Error) {
-                    error!("{} is Down ({} seconds) :(", site, config.interval * state_counter.count);
+                    // Todo: Make message variable
+                    send_slack_message(&config, site, &current_state);
+                    state_counter.notified = true;
                 }
+
                 std::io::stdout().flush().unwrap();
+
+                // Skip this count number
+                state_counter.count += 1;
                 continue;
             }
 
+            // Site was down, but is up again before mach retries is reached.
             if current_state == State::Up && state_counter.count < config.max_retries {
                 state_counter.state = State::Up;
-                state_counter.count = 0;
+                state_counter.count = 1;
                 continue;
             }
-            if current_state == State::Up && state_counter.count > config.max_retries{
+
+            // Site was down, notice was sent (max_retries expired)
+            // so send an 'up again'-message.
+            if current_state == State::Up && state_counter.notified {
 
                 if log_enabled!(Level::Error) {
-                    error!("{} is Up again after {} seconds! Yey :)", site, config.interval * state_counter.count);
+                    send_slack_message(&config, site, &current_state);
                 }
+                state_counter.notified = false;
                 std::io::stdout().flush().unwrap();
-                state_counter.count = 0;
+                state_counter.count = 1;
             }
-
         }
         std::thread::sleep(std::time::Duration::from_secs(config.interval));
-
     }
 }
 
@@ -123,9 +161,8 @@ fn get_site_state(url: &str) -> State{
                 r
             },
             Err(e) => {
-                println!("{}: {}",url,e);
-
-                // Site is unreachable so register as Down
+                error!("{}: {}",url,e);
+                // cURL failed to register site as Down
                 state = State::Down;
             }
         };
@@ -146,6 +183,27 @@ fn get_site_state(url: &str) -> State{
     state
 }
 
+fn send_slack_message(config: &Config, site: &String, state: &State) {
+
+    let slack = Slack::new(config.slack_url.as_str()).unwrap();
+
+    let text = match () {
+        _ if state == &State::Up => format!("{}: Yey! :tada: :tada: :tada: *{}* is UP Again!", config.identifier, site),
+        _ if state == &State::Down => format!("{}: *{}* is DOWN :sob:", config.identifier, site),
+        _ => String::from(""),
+    };
+
+    if text != "" {
+        let p = PayloadBuilder::new()
+            .text(text)
+            .channel("#monitor")
+            .icon_emoji(":chart_with_upward_trend:")
+            .build()
+            .unwrap();
+
+        let _res = slack.send(&p);
+    }
+}
 
 fn read_config(filename: &str) -> Config {
 
@@ -157,19 +215,37 @@ fn read_config(filename: &str) -> Config {
     let split = settings.get("sites").unwrap().split(" ");
     let mut sites: Vec<String> = Vec::new();
 
+    info!("--- Configuration ---");
+    info!("Checking websites :");
     for site in split {
         if site != "" {
+            info!(" {}", site);
             sites.push(String::from(site));
         }
     }
+    info!("---");
 
     let config: Config = Config {
-        interval: settings.get("interval").unwrap().parse().unwrap(),
+        interval: settings.get("interval").unwrap_or(&String::from("None")).parse().unwrap_or_else(|x|{
+            error!("{}",format!("Error parsing configuration: {:?}", x));
+            info!("No valid interval found. Setting it to 90 seconds");
+            90
+        }),
         identifier: settings.get("identifier").unwrap().parse().unwrap(),
         slack_url: settings.get("slack_url").unwrap().parse().unwrap(),
-        max_retries: settings.get("max_retries").unwrap().parse().unwrap(),
+        max_retries: settings.get("max_retries").unwrap().parse().unwrap_or_else(|x|{
+            error!("{}",format!("Error parsing configuration: {:?}", x));
+            info!("No max_retries value found. Setting it to 5");
+            5
+        }),
         sites
     };
+
+    info!("Checking with interval: {}", config.interval);
+    info!("Max retries: {}", config.max_retries);
+    info!("Slack Identifier: {}", config.identifier);
+    info!("Slack URL: {}", format!("{}/....../",&config.slack_url.split("/").collect::<Vec<&str>>()[0..6].join("/")));
+    info!("---------------------");
 
     config
 
